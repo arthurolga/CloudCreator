@@ -27,6 +27,26 @@ autoscaling_name = 'arthur-autoscaling-group'
 
 
 dbPath = ""
+wsPath = ""
+
+
+def redirect_data(path):
+    user_data = '''#! /bin/bash
+    sudo apt-get update
+    sudo apt-get -y install python3-pip
+    pip3 install flask
+    pip3 install flask_restful
+    pip3 install flask_httpauth
+    pip3 install flask_pymongo
+    cd home/ubuntu
+    git clone https://github.com/arthurolga/ProjetoCloud
+    cd ProjetoCloud/RedirectServer/
+    echo "teste" > teste.txt
+    echo "export NEW_URL=http://{}:5000" > redirect.rc
+    source redirect.rc
+    python3 redirect.py
+        '''.format(path)
+    return user_data
 
 
 def server_data(path):
@@ -40,8 +60,8 @@ def server_data(path):
     cd home/ubuntu
     git clone https://github.com/arthurolga/ProjetoCloud
     cd ProjetoCloud/Server/
-    echo "teste" > teste.txt
-    export DB=mongodb://{}:5000/tasks
+    echo "export DB=mongodb://{}:5000/tasks" > server.rc
+    source server.rc
     python3 server.py
         '''.format(path)
     return user_data
@@ -96,7 +116,7 @@ def create_key_pair(client, keyName):
 # Security Group
 
 
-def create_security_group(client):  # ec2
+def create_security_group(client, open=True):  # ec2
     vpcs = client.describe_vpcs()
     vpc_id = vpcs["Vpcs"][0]["VpcId"]
 
@@ -112,32 +132,34 @@ def create_security_group(client):  # ec2
         VpcId=vpc_id
     )
 
+    permissions = [{
+        'FromPort': 22,
+        'IpProtocol': 'TCP',
+        'IpRanges': [
+            {
+                'CidrIp': '0.0.0.0/0',
+                'Description': 'Porta pra SSH'
+            },
+        ],
+        'ToPort': 22
+    }]
+
+    if open:
+        permissions.append({
+            'FromPort': 5000,
+            'IpProtocol': 'TCP',
+            'IpRanges': [
+                {
+                    'CidrIp': '0.0.0.0/0',
+                    'Description': 'Porta para Server'
+                },
+            ],
+            'ToPort': 5000
+        })
+
     client.authorize_security_group_ingress(
         GroupId=securitygroup["GroupId"],
-        IpPermissions=[
-            {
-                'FromPort': 5000,
-                'IpProtocol': 'TCP',
-                'IpRanges': [
-                    {
-                        'CidrIp': '0.0.0.0/0',
-                        'Description': 'Porta pro Server'
-                    },
-                ],
-                'ToPort': 5000
-            },
-            {
-                'FromPort': 22,
-                'IpProtocol': 'TCP',
-                'IpRanges': [
-                    {
-                        'CidrIp': '0.0.0.0/0',
-                        'Description': 'Porta pra SSH'
-                    },
-                ],
-                'ToPort': 22
-            }
-        ]
+        IpPermissions=permissions
     )
     # print(securitygroup["GroupId"])
     return securitygroup
@@ -189,7 +211,7 @@ def delete_all_instances(client, resource, tag, value):
             print(e)
 
 
-def create_instances(client, resource, keyName, securitygroup, imageId, udata, num=1):  # ec2 e ec2r
+def create_instances(client, resource, keyName, securitygroupId, imageId, udata, name="Instance", num=1):  # ec2 e ec2r
     instance = resource.create_instances(
         ImageId=imageId,
         KeyName=keyName,
@@ -199,7 +221,7 @@ def create_instances(client, resource, keyName, securitygroup, imageId, udata, n
                 'Tags': [
                     {
                         'Key': 'Name',
-                        'Value': 'APS3 - Arthur'
+                        'Value': ownerName+"-"+name
                     },
                     {
                         'Key': 'Owner',
@@ -214,7 +236,7 @@ def create_instances(client, resource, keyName, securitygroup, imageId, udata, n
         UserData=udata,
         DryRun=False,
         SecurityGroupIds=[
-            securitygroup["GroupId"]
+            securitygroupId  # securitygroup["GroupId"]
         ]
     )
     # print(instance)
@@ -449,22 +471,82 @@ def register_targets(client, targetGroupArn, loadBalancerName):
         Port=5000,
         Protocol='HTTP',
     )
-    # except ClientError as e:
-    #     print(e)
+
+
+def edit_authorization(client, securityGroupName, dns):
+    response = client.authorize_security_group_ingress(
+        GroupName=securityGroupName,
+        # GroupId="sg-037ca28dda16a98e6"
+        IpPermissions=[
+            {
+                'FromPort': 5000,
+                'IpProtocol': 'TCP',
+                'IpRanges': [
+                    {
+                        'CidrIp': dns+'/32',
+                        'Description': 'Porta para aceitar o Server de Virginia'
+                    },
+                ],
+                'ToPort': 5000
+            }
+        ]
+    )
+
+
+def print_step(int):
+    lista = [' ', ' ', ' ', ' ', ' ', ' ']
+    for i in range(int):
+        lista[i] = 'X'
+
+    print(''''
+/North Virginia                                      /Ohio
++--------------------------------------------------+ +--------------------------------------+
+|                                                  | |                                      |
+|                      +--------+                  | |                                      |
+|                      |        |                  | |                                      |
+|    +--------+        |        |   +------------+ | |         +-----------+     +-------+  |
+|    |        |        |  ASG   |   |            | | |         |           |     |       |  |
+|    |  LB    +--------+        +---+  Redirect  +-------------+ webserver +-----+mongodb|  |
+|    |      '''+lista[4]+''' |        |        |   |        '''+lista[2]+'''   | | |         |       '''+lista[1]+'''   |     |    '''+lista[0]+'''  |  |
+|    +--------+        |      '''+lista[3]+''' |   +------------+ | |         +-----------+     +-------+  |
+|                      +--------+                  | |                                      |
+|                                                  | |                                      |
++--------------------------------------------------+ +--------------------------------------+
+    ''')
 
 
 def create_ohio():
     delete_all_instances(ec2db, ec2rdb, "Owner", ownerName)
     create_key_pair(ec2db, keyName2)
-    sgroup = create_security_group(ec2db)
-    db = create_instances(ec2db, ec2rdb, keyName2, sgroup,
-                          ubuntu_east2, user_data_db)
+    sgroup = create_security_group(ec2db, open=False)
+
+    # MongoDB
+    db = create_instances(ec2db, ec2rdb, keyName2, sgroup["GroupId"],
+                          ubuntu_east2, user_data_db, name="Mongo-Database")
 
     db[0].load()
-    print(db[0].id, db[0].public_dns_name)
+    db_dns = db[0].public_dns_name
+    print_step(1)
+    print("MongoDB Public DNS", db_dns)
+
+    # WebServer
+    ws = create_instances(ec2db, ec2rdb, keyName2, sgroup["GroupId"],
+                          ubuntu_east2, server_data(db_dns), name="WebServer")
+
+    ws[0].load()
+    ws_dns = ws[0].public_dns_name
+    ws_pv = ws[0].private_ip_address
+    print_step(2)
+    print("WebServer Ohio Public DNS", ws_dns)
+
+    # Authorizing WebServer
+    edit_authorization(ec2db, securityGroupName, ws_pv)
 
     global dbPath
-    dbPath = str(db[0].public_dns_name)
+    dbPath = str(db_dns)
+
+    global wsPath
+    wsPath = str(ws_dns)
 
 
 def create_virginia():
@@ -479,6 +561,17 @@ def create_virginia():
 
     create_key_pair(ec2, keyName)
     sgroup = create_security_group(ec2)
+
+    # Redirect Instance
+    red = create_instances(ec2, ec2r, keyName, sgroup["GroupId"],
+                           ubuntu_east1, redirect_data(wsPath), name="Redirect-Server")
+
+    red[0].load()
+    red_dns = red[0].public_dns_name
+    red_ip = red[0].public_ip_address
+    print_step(3)
+    print("Redirect Server Public DNS", red_dns)
+
     create_load_balancer(loadBalancerName, sgroup["GroupId"])
 
     #instances = create_instances(ec2, ec2r, sgroup, udata=user_data)
@@ -486,44 +579,47 @@ def create_virginia():
     tg = create_target_group(ec2, elbv, targetGroupName)
     tgARN = tg["TargetGroups"][0]["TargetGroupArn"]
 
-    print(">>>> dbPath: ", dbPath)
-    create_launch_configuration(autoscaling, server_data(dbPath))
+    # server_data(dbPath))
+    create_launch_configuration(autoscaling,  redirect_data(red_dns))
 
     auto_group = create_auto_scaling_group(autoscaling, tg)
 
+    print("Auto Scaling Group", auto_group)
+
     register_targets(elbv, tgARN, loadBalancerName)
+    print_step(5)
+
+    print("Authorizing Ohio")
+    edit_authorization(ec2db, securityGroupName, red_ip)
 
 
 if __name__ == '__main__':
-    # create_ohio()
-    # print('\a')
-    # create_virginia()
-    # delete_all_instances(ec2, ec2r, "Owner", ownerName)
-    # delete_all_instances(
-    #     ec2, ec2r, "aws:autoscaling:groupName", autoscaling_name)
+    print(''''
+/North Virginia                                      /Ohio
++--------------------------------------------------+ +--------------------------------------+
+|                                                  | |                                      |
+|                      +--------+                  | |                                      |
+|                      |        |                  | |                                      |
+|    +--------+        |        |   +------------+ | |         +-----------+     +-------+  |
+|    |        |        |  ASG   |   |            | | |         |           |     |       |  |
+|    |  LB    +--------+        +---+  Redirect  +-------------+ webserver +-----+mongodb|  |
+|    |        |        |        |   |            | | |         |           |     |       |  |
+|    +--------+        |        |   +------------+ | |         +-----------+     +-------+  |
+|                      +--------+                  | |                                      |
+|                                                  | |                                      |
++--------------------------------------------------+ +--------------------------------------+
 
-    # delete_auto_scaling_group(autoscaling, autoscaling_name)
-    # delete_target_group(targetGroupName)
-    # delete_load_balancer(loadBalancerName)
-    # delete_launch_configuration(autoscaling)
 
-    # create_key_pair(ec2, keyName)
-    # sgroup = create_security_group(ec2)
-    # create_load_balancer(loadBalancerName, sgroup["GroupId"])
+    ''')
+    print("   Creating Ohio ....")
+    create_ohio()
+    print("   Ohio Successfully Created!")
 
-    # #instances = create_instances(ec2, ec2r, sgroup, udata=user_data)
+    print("   Creating Virginia ....")
+    create_virginia()
+    print("   Virginia Successfully Created!")
 
-    # tg = create_target_group(ec2, elbv, targetGroupName)
-    # tgARN = tg["TargetGroups"][0]["TargetGroupArn"]
-
-    # create_launch_configuration(autoscaling)
-
-    # auto_group = create_auto_scaling_group(autoscaling, tg)
-
-    # register_targets(elbv, tgARN, loadBalancerName)
-
-    # create_instances(ec2db, ec2rdb, keyName2, sgroup,
-    #                  ubuntu_east2, user_data_db)
+    print(securityGroupName)
 
     print(">>>>>> DONE ~~")
     print('\a')
@@ -534,18 +630,3 @@ if __name__ == '__main__':
     time.sleep(0.1)
     print('\a')
     time.sleep(0.1)
-
-
-# mkdir server
-# cd server/
-# git clone https://github.com/arthurolga/ProjetoCloud
-# cd ProjetoCloud/APS1
-# sudo apt update
-# sudo apt install python3-pip
-# Y
-# pip3 install flask
-# pip3 install flask_restful
-# pip3 install flask_httpauth
-
-
-#waiterInstance = ec2.get_waiter()
