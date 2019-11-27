@@ -1,5 +1,8 @@
 # CloudCreator
 
+## Model
+<img src="cloud.png"/>
+
 ## Configure AWS
 ``` 
 $ aws configure 
