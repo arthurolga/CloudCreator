@@ -2,6 +2,7 @@ import boto3
 import time
 from os import path, chmod
 from botocore.exceptions import ClientError
+from config import *
 
 
 ec2 = boto3.client('ec2')
@@ -15,15 +16,6 @@ ubuntu_east1 = 'ami-04b9e92b5572fa0d1'
 ec2db = boto3.client('ec2', region_name="us-east-2")
 ec2rdb = boto3.resource('ec2', region_name="us-east-2")
 ubuntu_east2 = 'ami-0d5d9d301c853a04a'
-
-
-keyName = 'virginia'
-keyName2 = 'ohio'
-securityGroupName = 'Arthur-SG'
-targetGroupName = 'Arthur-target-group'
-loadBalancerName = 'arthur-load-balancer'
-launch_config_name = 'arthur-launch-configuration'
-autoscaling_name = 'arthur-autoscaling-group'
 
 
 dbPath = ""
@@ -79,8 +71,6 @@ sed -i 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/' /etc/mongod.conf
 sudo service mongod start
     '''
 
-
-ownerName = 'Arthur'
 
 # KEYPAIR
 
@@ -312,7 +302,12 @@ def create_load_balancer(name, securityId):
         IpAddressType='ipv4'
     )
 
-    # print(response["LoadBalancers"][0])
+    print(response["LoadBalancers"][0]['DNSName'])
+
+    f = open("output.py", "a")
+    f.write('loadBalancerDNS="{}"'.format(
+        response["LoadBalancers"][0]['DNSName']))
+    f.close()
 
     # Wait
     waiter_instance = elbv.get_waiter("load_balancer_available")
