@@ -7,6 +7,8 @@
 ``` 
 $ aws configure 
 ```
+## Edit Config.py
+You can edit the config.py file; otherwise, the names displayed on instances, securitygroups, loadbalances, etc. will be named after the example config.py, which should run correctly.
 
 ## Run script
 ``` 
